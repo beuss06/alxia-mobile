@@ -2,14 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Home, Plus, User, MessageCircle, BarChart3 } from 'lucide-react-native';
+import { Ionicons } from '@expo/vector-icons';
 import CreatorUploadScreen from './components/CreatorUploadScreen';
 import CreatorDashboard from './components/CreatorDashboard';
+import HomeScreen from './components/HomeScreen';
 import LoginScreen from './components/LoginScreen';
 import MessagesScreen from './components/MessagesScreen';
+import ProfileScreen from './components/ProfileScreen';
 import { StatusBar } from 'expo-status-bar';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as SecureStore from 'expo-secure-store';
+import { clearToken } from './lib/api';
+import { DiscreetModeProvider, useDiscreetMode } from './lib/discreetMode';
+import DiscreetCalculator from './components/DiscreetCalculator';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -24,7 +29,15 @@ function CreatorStack() {
   );
 }
 
-function MainApp() {
+interface MainAppProps {
+  onLogout: () => void;
+}
+
+function MainApp({ onLogout }: MainAppProps) {
+  function ProfileWrapper() {
+    return <ProfileScreen onLogout={onLogout} />;
+  }
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -33,12 +46,23 @@ function MainApp() {
         headerShown: false,
       }}
     >
-      <Tab.Screen name="Accueil" component={() => <></>} options={{ tabBarIcon: ({ color, size }) => <Home color={color} size={size} /> }} />
-      <Tab.Screen name="Créer" component={CreatorStack} options={{ tabBarIcon: ({ color, size }) => <Plus color={color} size={size} /> }} />
-      <Tab.Screen name="Dashboard" component={CreatorDashboard} options={{ tabBarIcon: ({ color, size }) => <BarChart3 color={color} size={size} /> }} />
-      <Tab.Screen name="Messages" component={MessagesScreen} options={{ tabBarIcon: ({ color, size }) => <MessageCircle color={color} size={size} /> }} />
-      <Tab.Screen name="Profil" component={() => <></>} options={{ tabBarIcon: ({ color, size }) => <User color={color} size={size} /> }} />
+      <Tab.Screen name="Accueil" component={HomeScreen} options={{ tabBarIcon: ({ color, size }) => <Ionicons name="home" color={color} size={size} /> }} />
+      <Tab.Screen name="Créer" component={CreatorStack} options={{ tabBarIcon: ({ color, size }) => <Ionicons name="add-circle" color={color} size={size} /> }} />
+      <Tab.Screen name="Dashboard" component={CreatorDashboard} options={{ tabBarIcon: ({ color, size }) => <Ionicons name="bar-chart" color={color} size={size} /> }} />
+      <Tab.Screen name="Messages" component={MessagesScreen} options={{ tabBarIcon: ({ color, size }) => <Ionicons name="chatbubble" color={color} size={size} /> }} />
+      <Tab.Screen name="Profil" component={ProfileWrapper} options={{ tabBarIcon: ({ color, size }) => <Ionicons name="person" color={color} size={size} /> }} />
     </Tab.Navigator>
+  );
+}
+
+function AppShell({ isLoggedIn, onLoginSuccess, onLogout }: { isLoggedIn: boolean; onLoginSuccess: () => void; onLogout: () => void }) {
+  const { isActive } = useDiscreetMode();
+  if (isActive) return <DiscreetCalculator />;
+  return (
+    <NavigationContainer>
+      <StatusBar style="light" />
+      {isLoggedIn ? <MainApp onLogout={onLogout} /> : <LoginScreen onLoginSuccess={onLoginSuccess} />}
+    </NavigationContainer>
   );
 }
 
@@ -57,14 +81,18 @@ export default function App() {
 
   const handleLoginSuccess = () => setIsLoggedIn(true);
 
+  const handleLogout = async () => {
+    await clearToken();
+    setIsLoggedIn(false);
+  };
+
   if (checkingAuth) return <></>;
 
   return (
     <QueryClientProvider client={queryClient}>
-      <NavigationContainer>
-        <StatusBar style="light" />
-        {isLoggedIn ? <MainApp /> : <LoginScreen onLoginSuccess={handleLoginSuccess} />}
-      </NavigationContainer>
+      <DiscreetModeProvider>
+        <AppShell isLoggedIn={isLoggedIn} onLoginSuccess={handleLoginSuccess} onLogout={handleLogout} />
+      </DiscreetModeProvider>
     </QueryClientProvider>
   );
 }
