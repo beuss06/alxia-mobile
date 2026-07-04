@@ -1,121 +1,230 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Image, Alert, ActivityIndicator, TextInput } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Image,
+  ScrollView,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { Video } from 'expo-av';
-import * as VideoThumbnails from 'expo-video-thumbnails';
-import Slider from 'react-native-slider';
-import { Plus, Trash2, Play, Scissors, Palette, Upload } from 'lucide-react-native';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createPost } from '../lib/api';
+import { api } from '../lib/api';
 
-interface MediaItem {
-  id: string;
-  uri: string;
-  type: 'photo' | 'video';
-  duration?: number;
-  trimStart?: number;
-  trimEnd?: number;
-  filter?: string;
-  thumbnail?: string;
+interface PostPayload {
+  title: string;
+  description: string;
+  price: string;
+  imageUri: string | null;
 }
 
-const FILTER_PRESETS = [
-  { id: 'normal', label: 'Normal' },
-  { id: 'vintage', label: 'Vintage' },
-  { id: 'bw', label: 'Noir & Blanc' },
-  { id: 'warm', label: 'Chaud' },
-  { id: 'cool', label: 'Froid' },
-];
-
 export default function CreatorUploadScreen() {
-  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [caption, setCaption] = useState('');
-  const queryClient = useQueryClient();
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [price, setPrice] = useState('');
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const selectedMedia = mediaItems.find(m => m.id === selectedId);
+  const handlePickImage = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission refusée', "L'accès à la galerie est nécessaire.");
+      return;
+    }
 
-  const generateThumbnail = async (videoUri: string): Promise<string | undefined> => {
-    try {
-      const { uri } = await VideoThumbnails.getThumbnailAsync(videoUri, { time: 1000, quality: 0.6 });
-      return uri;
-    } catch { return undefined; }
-  };
-
-  const pickMedia = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      allowsMultipleSelection: true,
-      quality: 0.7,
-      videoMaxDuration: 300,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
     });
 
-    if (!result.canceled && result.assets) {
-      const newItems: MediaItem[] = [];
-      for (const asset of result.assets) {
-        const item: MediaItem = {
-          id: Date.now() + '-' + Math.random(),
-          uri: asset.uri,
-          type: asset.type === 'video' ? 'video' : 'photo',
-          duration: asset.duration ? asset.duration / 1000 : undefined,
-          trimStart: 0,
-          trimEnd: asset.duration ? asset.duration / 1000 : undefined,
-        };
-        if (item.type === 'video') item.thumbnail = await generateThumbnail(asset.uri);
-        newItems.push(item);
-      }
-      setMediaItems(prev => [...prev, ...newItems]);
-      if (!selectedId && newItems.length > 0) setSelectedId(newItems[0].id);
+    if (!result.canceled && result.assets.length > 0) {
+      setImageUri(result.assets[0].uri);
     }
   };
 
-  const updateTrim = (start: number, end: number) => {
-    if (!selectedMedia || selectedMedia.type !== 'video' || !selectedId) return;
-    setMediaItems(prev => prev.map(item => item.id === selectedId ? { ...item, trimStart: Math.max(0, Math.min(start, end)), trimEnd: Math.min(item.duration || 9999, Math.max(end, start)) } : item));
-  };
-
-  const applyFilter = (filterId: string) => {
-    if (!selectedId) return;
-    setMediaItems(prev => prev.map(item => item.id === selectedId ? { ...item, filter: filterId } : item));
-    Alert.alert('Filtre appliqué', filterId);
-  };
-
-  const removeMedia = (id: string) => {
-    const newItems = mediaItems.filter(item => item.id !== id);
-    setMediaItems(newItems);
-    if (selectedId === id) setSelectedId(newItems.length > 0 ? newItems[0].id : null);
-  };
-
-  const uploadMutation = useMutation({ mutationFn: createPost, onSuccess: () => { Alert.alert('Succès', 'Publié !'); setMediaItems([]); setSelectedId(null); setCaption(''); queryClient.invalidateQueries({ queryKey: ['creatorPosts'] }); }, onError: (e: any) => Alert.alert('Erreur', e?.response?.data?.message || 'Échec') });
-
-  const handleUpload = async () => {
-    if (mediaItems.length === 0) return;
-    setIsUploading(true);
-    const formData = new FormData();
-    mediaItems.forEach((item, idx) => {
-      formData.append('files', { uri: item.uri, name: `media_${idx}.${item.type === 'video' ? 'mp4' : 'jpg'}`, type: item.type === 'video' ? 'video/mp4' : 'image/jpeg' } as any);
-      if (item.type === 'video') { formData.append(`trimStart_${idx}`, String(item.trimStart || 0)); formData.append(`trimEnd_${idx}`, String(item.trimEnd || item.duration || 0)); }
-      if (item.filter) formData.append(`filter_${idx}`, item.filter);
-    });
-    formData.append('caption', caption || ''); formData.append('isLocked', 'true');
-    uploadMutation.mutate(formData); setIsUploading(false);
+  const handlePublish = async () => {
+    if (!title.trim()) {
+      Alert.alert('Erreur', 'Le titre est requis.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await api.post('/posts', {
+        title: title.trim(),
+        description: description.trim(),
+        price: price.trim() || '0',
+        imageUri,
+      } as PostPayload);
+      Alert.alert('Succès', 'Votre post a été publié !');
+      setTitle('');
+      setDescription('');
+      setPrice('');
+      setImageUri(null);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Échec de la publication';
+      Alert.alert('Erreur', message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <ScrollView className="flex-1 bg-gray-950 p-4" contentContainerStyle={{ paddingBottom: 120 }}>
-      <Text className="text-white text-3xl font-bold mb-1">Créer du contenu</Text>
-      <Text className="text-rose-400 mb-6">Performances vidéo optimisées</Text>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <Text style={styles.screenTitle}>Créer du contenu</Text>
 
-      <TouchableOpacity onPress={pickMedia} className="bg-rose-600 py-4 rounded-2xl flex-row justify-center items-center mb-6">
-        <Plus color="white" size={22} /><Text className="text-white text-lg font-semibold ml-3">Ajouter médias</Text>
+      <Text style={styles.label}>Titre</Text>
+      <TextInput
+        style={styles.input}
+        value={title}
+        onChangeText={setTitle}
+        placeholder="Titre du post"
+        placeholderTextColor="#6b7280"
+      />
+
+      <Text style={styles.label}>Description</Text>
+      <TextInput
+        style={[styles.input, styles.textArea]}
+        value={description}
+        onChangeText={setDescription}
+        placeholder="Description…"
+        placeholderTextColor="#6b7280"
+        multiline
+        numberOfLines={4}
+        textAlignVertical="top"
+      />
+
+      <Text style={styles.label}>Prix (€)</Text>
+      <TextInput
+        style={styles.input}
+        value={price}
+        onChangeText={setPrice}
+        placeholder="0"
+        placeholderTextColor="#6b7280"
+        keyboardType="numeric"
+      />
+
+      <TouchableOpacity style={styles.pickButton} onPress={handlePickImage} activeOpacity={0.8}>
+        <Text style={styles.pickButtonText}>
+          {imageUri ? 'Changer l\'image' : 'Choisir une image'}
+        </Text>
       </TouchableOpacity>
 
-      {mediaItems.length > 0 && <View className="mb-6"><Text className="text-white mb-3">Médias ({mediaItems.length}) — Miniatures générées</Text><ScrollView horizontal>{mediaItems.map(item => (<TouchableOpacity key={item.id} onPress={() => setSelectedId(item.id)} className={`mr-3 rounded-2xl overflow-hidden border-2 ${selectedId === item.id ? 'border-rose-500' : 'border-gray-700'}`}>{item.type === 'photo' ? <Image source={{uri: item.uri}} style={{width:110,height:110}} /> : item.thumbnail ? <Image source={{uri: item.thumbnail}} style={{width:110,height:110}} /> : <View style={{width:110,height:110,backgroundColor:'#1f2937',alignItems:'center',justifyContent:'center'}}><Play color="#f43f5e" size={36}/></View>}<TouchableOpacity onPress={() => removeMedia(item.id)} className="absolute top-1 right-1 bg-black/70 p-1.5 rounded-full"><Trash2 color="#fff" size={15}/></TouchableOpacity></TouchableOpacity>))}</ScrollView></View>}
+      {imageUri ? (
+        <View style={styles.previewContainer}>
+          <Image source={{ uri: imageUri }} style={styles.preview} resizeMode="cover" />
+          <TouchableOpacity
+            style={styles.removeImageButton}
+            onPress={() => setImageUri(null)}
+          >
+            <Text style={styles.removeImageText}>Supprimer</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
-      {selectedMedia && <View className="bg-gray-900 rounded-3xl p-5 mb-6"><Text className="text-white text-xl mb-4">Édition</Text><View style={{aspectRatio:16/9}} className="mb-5 rounded-2xl overflow-hidden bg-black">{selectedMedia.type === 'photo' ? <Image source={{uri:selectedMedia.uri}} style={{flex:1}} resizeMode="cover" /> : <Video source={{uri:selectedMedia.uri}} style={{flex:1}} useNativeControls resizeMode="contain" />}</View>{selectedMedia.type === 'video' && selectedMedia.duration && <View className="mb-6"><Text className="text-white mb-2">Découper vidéo</Text><Slider minimumValue={0} maximumValue={selectedMedia.duration} value={selectedMedia.trimStart||0} onValueChange={v => updateTrim(v, selectedMedia.trimEnd||selectedMedia.duration)} minimumTrackTintColor="#f43f5e" thumbTintColor="#fff" /><Slider minimumValue={0} maximumValue={selectedMedia.duration} value={selectedMedia.trimEnd||selectedMedia.duration} onValueChange={v => updateTrim(selectedMedia.trimStart||0, v)} minimumTrackTintColor="#f43f5e" thumbTintColor="#fff" /></View>}<View><Text className="text-white mb-2">Filtres</Text><View className="flex-row flex-wrap gap-2">{FILTER_PRESETS.map(p => <TouchableOpacity key={p.id} onPress={() => applyFilter(p.id)} className={`px-4 py-2 rounded-full ${selectedMedia.filter===p.id?'bg-rose-600':'bg-gray-800'}`}><Text className="text-white">{p.label}</Text></TouchableOpacity>)}</View></View></View>}
-
-      {mediaItems.length > 0 && <View><TextInput value={caption} onChangeText={setCaption} placeholder="Légende" className="bg-gray-900 text-white p-4 rounded-2xl mb-4" multiline /><TouchableOpacity onPress={handleUpload} disabled={uploadMutation.isPending||isUploading} className="bg-white py-4 rounded-2xl items-center"><Text className="text-gray-900 font-bold">Publier (optimisé)</Text></TouchableOpacity></View>}
+      <TouchableOpacity
+        style={[styles.publishButton, loading && styles.publishButtonDisabled]}
+        onPress={handlePublish}
+        disabled={loading}
+        activeOpacity={0.8}
+      >
+        {loading ? (
+          <ActivityIndicator color="#ffffff" />
+        ) : (
+          <Text style={styles.publishButtonText}>Publier</Text>
+        )}
+      </TouchableOpacity>
     </ScrollView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#111827',
+  },
+  content: {
+    padding: 20,
+    paddingBottom: 60,
+  },
+  screenTitle: {
+    color: '#ffffff',
+    fontSize: 26,
+    fontWeight: '700',
+    marginBottom: 28,
+  },
+  label: {
+    color: '#d1d5db',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  input: {
+    backgroundColor: '#1f2937',
+    color: '#ffffff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 15,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  textArea: {
+    minHeight: 100,
+    paddingTop: 14,
+  },
+  pickButton: {
+    backgroundColor: '#1f2937',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#f43f5e',
+  },
+  pickButtonText: {
+    color: '#f43f5e',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  previewContainer: {
+    marginBottom: 24,
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  preview: {
+    width: '100%',
+    height: 220,
+    borderRadius: 14,
+  },
+  removeImageButton: {
+    backgroundColor: '#374151',
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginTop: 8,
+    borderRadius: 10,
+  },
+  removeImageText: {
+    color: '#f87171',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  publishButton: {
+    backgroundColor: '#f43f5e',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  publishButtonDisabled: {
+    opacity: 0.6,
+  },
+  publishButtonText: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+});
